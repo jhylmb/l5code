@@ -7,6 +7,7 @@ use App\Http\Requests\ArticlesRequest;
 use Illuminate\Contracts\Pagination\LengthAwarePaginator;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Http\Request;
+use File;
 
 class ArticlesController extends Controller implements Cacheable
 {
@@ -78,12 +79,11 @@ class ArticlesController extends Controller implements Cacheable
      * @return \Illuminate\Http\Response
      */
     public function store(ArticlesRequest $request) {
-        // 글 저장
-        $payload = array_merge($request->all(), [
-            'notification' => $request->has('notification'),
-        ]);
+        $user = $request->user();
 
-        $article = $request->user()->articles()->create($payload);
+        $article = $user->articles()->create(
+            $request->getPayload()
+        );
 
         if (! $article) {
             flash()->error(
@@ -95,6 +95,12 @@ class ArticlesController extends Controller implements Cacheable
 
         // 태그 싱크
         $article->tags()->sync($request->input('tags'));
+
+        // 첨부파일 연결
+        $request->getAttachments()->each(function ($attachment) use ($article) {
+            $attachment->article()->associate($article);
+            $attachment->save();
+        });
 
         event(new \App\Events\ArticlesEvent($article));
         event(new \App\Events\ModelChanged(['articles']));
@@ -172,11 +178,27 @@ class ArticlesController extends Controller implements Cacheable
     public function destroy(Article $article)
     {
         $this->authorize('delete', $article);
+        
+        $this->deleteAttachments($article->attachments);
+        
         $article->delete();
 
         event(new \App\Events\ModelChanged(['articles']));
 
         return response()->json([], 204, [], JSON_PRETTY_PRINT);
+    }
+    
+    public function deleteAttachments(Collection $attachments)
+    {
+        $attachments->each(function ($attachment) {
+            $filePath = $attachments_path($attachment->filename);
+            
+            if (File::exists($filePath)) {
+                File::delete($filePath);
+            }
+            
+            return $attachment->delete();
+        });
     }
 
     /* Response Methods */
